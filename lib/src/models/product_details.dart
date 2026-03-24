@@ -1,5 +1,5 @@
-class NativeInAppProduct {
-  const NativeInAppProduct({
+class ProductDetails {
+  const ProductDetails({
     required this.id,
     required this.title,
     required this.description,
@@ -7,11 +7,11 @@ class NativeInAppProduct {
     required this.rawPrice,
     required this.currencyCode,
     required this.currencySymbol,
-    required this.type,
+    this.type = 'inapp',
   });
 
-  factory NativeInAppProduct.fromMap(Map<String, dynamic> map) {
-    return NativeInAppProduct(
+  factory ProductDetails.fromMap(Map<String, dynamic> map) {
+    return ProductDetails(
       id: map['id'] as String? ?? '',
       title: map['title'] as String? ?? '',
       description: map['description'] as String? ?? '',
@@ -45,3 +45,5 @@ class NativeInAppProduct {
     };
   }
 }
+
+typedef NativeInAppProduct = ProductDetails;

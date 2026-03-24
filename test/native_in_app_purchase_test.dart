@@ -7,7 +7,8 @@ void main() {
 
   const MethodChannel methodChannel = MethodChannel('native_in_app_purchase');
   final List<MethodCall> calls = <MethodCall>[];
-  final NativeInAppPurchase plugin = NativeInAppPurchase(
+  final InAppPurchase plugin = InAppPurchase.instance;
+  final NativeInAppPurchase rawPlugin = NativeInAppPurchase(
     methodChannel: methodChannel,
     eventChannel: const EventChannel('native_in_app_purchase/events'),
   );
@@ -56,26 +57,28 @@ void main() {
   });
 
   test('initializes billing', () async {
-    await plugin.initialize();
+    await rawPlugin.initialize();
 
     expect(calls.single.method, 'initialize');
   });
 
   test('reports store availability', () async {
-    expect(await plugin.isAvailable(), isTrue);
+    expect(await rawPlugin.isAvailable(), isTrue);
   });
 
   test('queries products and parses result', () async {
-    final response = await plugin.getProductsResponse(<String>['coins_pack']);
+    final response = await rawPlugin.queryProductDetails(<String>{
+      'coins_pack',
+    });
 
-    expect(response.products, hasLength(1));
-    expect(response.products.single.id, 'coins_pack');
-    expect(response.products.single.price, '\$1.99');
-    expect(response.notFoundIds, <String>['missing_sku']);
+    expect(response.productDetails, hasLength(1));
+    expect(response.productDetails.single.id, 'coins_pack');
+    expect(response.productDetails.single.price, '\$1.99');
+    expect(response.notFoundIDs, <String>['missing_sku']);
   });
 
   test('parses purchase model values', () {
-    final purchase = Purchase.fromMap(<String, Object?>{
+    final purchase = PurchaseDetails.fromMap(<String, Object?>{
       'status': 'purchased',
       'productId': 'coins_pack',
       'transactionId': 'txn_123',
@@ -91,9 +94,13 @@ void main() {
     });
 
     expect(purchase.status, PurchaseStatus.purchased);
-    expect(purchase.productId, 'coins_pack');
-    expect(purchase.transactionId, 'txn_123');
-    expect(purchase.verificationData?.serverVerificationData, 'server_payload');
+    expect(purchase.productID, 'coins_pack');
+    expect(purchase.purchaseID, 'txn_123');
+    expect(purchase.verificationData.serverVerificationData, 'server_payload');
     expect(purchase.isConsumable, isTrue);
+  });
+
+  test('in_app_purchase style wrapper exists', () {
+    expect(plugin.purchaseStream, isA<Stream<List<PurchaseDetails>>>());
   });
 }

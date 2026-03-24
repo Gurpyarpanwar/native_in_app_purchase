@@ -314,7 +314,7 @@ class BillingManager(
             BillingClient.BillingResponseCode.USER_CANCELED -> {
                 listener.onPurchaseUpdate(
                     purchaseMap(
-                        status = "failed",
+                        status = "canceled",
                         productId = "",
                         transactionId = "",
                         errorCode = "user_canceled",
@@ -426,7 +426,7 @@ class BillingManager(
             wasRestored -> "restored"
             purchase.purchaseState == Purchase.PurchaseState.PENDING -> "pending"
             purchase.purchaseState == Purchase.PurchaseState.PURCHASED -> "purchased"
-            else -> "failed"
+            else -> "error"
         }
 
         val transactionId = purchase.orderId ?: purchase.purchaseToken

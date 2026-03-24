@@ -1,6 +1,6 @@
 name: native_in_app_purchase
 description: Flutter plugin for native Android and iOS in-app purchases.
-version: 0.0.1
+version: 0.1.0
 homepage: https://github.com/Gurpyarpanwar/native_in_app_purchase
 repository: https://github.com/Gurpyarpanwar/native_in_app_purchase
 issue_tracker: https://github.com/Gurpyarpanwar/native_in_app_purchase/issues

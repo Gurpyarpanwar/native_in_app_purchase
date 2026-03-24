@@ -20,11 +20,11 @@ class _MyAppState extends State<MyApp> {
     'premium_upgrade',
   ];
 
-  final NativeInAppPurchase _nativeInAppPurchasePlugin = NativeInAppPurchase();
+  final InAppPurchase _inAppPurchase = InAppPurchase.instance;
 
-  StreamSubscription<Purchase>? _purchaseSubscription;
-  List<NativeInAppProduct> _products = const <NativeInAppProduct>[];
-  Purchase? _latestPurchase;
+  StreamSubscription<List<PurchaseDetails>>? _purchaseSubscription;
+  List<ProductDetails> _products = const <ProductDetails>[];
+  PurchaseDetails? _latestPurchase;
   List<String> _notFoundIds = const <String>[];
   String? _statusMessage;
   bool _isLoading = true;
@@ -32,8 +32,8 @@ class _MyAppState extends State<MyApp> {
   @override
   void initState() {
     super.initState();
-    _purchaseSubscription = _nativeInAppPurchasePlugin.purchaseUpdates.listen(
-      _handlePurchaseUpdate,
+    _purchaseSubscription = _inAppPurchase.purchaseStream.listen(
+      _handlePurchaseUpdates,
       onError: _handlePurchaseError,
     );
     _initializeStore();
@@ -47,10 +47,10 @@ class _MyAppState extends State<MyApp> {
 
   Future<void> _initializeStore() async {
     try {
-      await _nativeInAppPurchasePlugin.initialize();
-      final isAvailable = await _nativeInAppPurchasePlugin.isAvailable();
-      final response = await _nativeInAppPurchasePlugin.getProductsResponse(
-        _productIds,
+      await _inAppPurchase.initialize();
+      final isAvailable = await _inAppPurchase.isAvailable();
+      final response = await _inAppPurchase.queryProductDetails(
+        _productIds.toSet(),
       );
 
       if (!mounted) {
@@ -59,11 +59,11 @@ class _MyAppState extends State<MyApp> {
 
       setState(() {
         _products = response.products;
-        _notFoundIds = response.notFoundIds;
+        _notFoundIds = response.notFoundIDs;
         _isLoading = false;
         _statusMessage = !isAvailable
             ? 'Store is not available on this device.'
-            : response.products.isEmpty
+            : response.productDetails.isEmpty
             ? 'No products found. Configure the same IDs in Play Console or App Store Connect.'
             : 'Store initialized. Tap a product to start purchase flow.';
       });
@@ -79,14 +79,19 @@ class _MyAppState extends State<MyApp> {
     }
   }
 
-  void _handlePurchaseUpdate(Purchase purchase) {
+  void _handlePurchaseUpdates(List<PurchaseDetails> purchases) {
+    if (purchases.isEmpty) {
+      return;
+    }
+
+    final purchase = purchases.last;
     if (!mounted) {
       return;
     }
     setState(() {
       _latestPurchase = purchase;
       _statusMessage =
-          'Purchase update: ${purchase.status.name} for ${purchase.productId.isEmpty ? 'unknown' : purchase.productId}';
+          'Purchase update: ${purchase.status.name} for ${purchase.productID.isEmpty ? 'unknown' : purchase.productID}';
     });
 
     if (purchase.pendingCompletePurchase) {
@@ -145,7 +150,7 @@ class _MyAppState extends State<MyApp> {
                       )
                     else
                       ..._products.map(
-                        (NativeInAppProduct product) => Card(
+                        (ProductDetails product) => Card(
                           child: ListTile(
                             title: Text(product.title),
                             subtitle: Text(
@@ -179,13 +184,13 @@ class _MyAppState extends State<MyApp> {
                               ? 'No purchase events yet.'
                               : '''
 status: ${_latestPurchase!.status.name}
-productId: ${_latestPurchase!.productId}
-transactionId: ${_latestPurchase!.transactionId}
+productId: ${_latestPurchase!.productID}
+transactionId: ${_latestPurchase!.purchaseID ?? '-'}
 purchaseToken: ${_latestPurchase!.purchaseToken ?? '-'}
-serverVerificationData: ${_latestPurchase!.verificationData?.serverVerificationData ?? '-'}
-source: ${_latestPurchase!.verificationData?.source ?? '-'}
+serverVerificationData: ${_latestPurchase!.verificationData.serverVerificationData}
+source: ${_latestPurchase!.verificationData.source}
 pendingCompletePurchase: ${_latestPurchase!.pendingCompletePurchase}
-error: ${_latestPurchase!.errorMessage ?? '-'}
+error: ${_latestPurchase!.error?.message ?? '-'}
 ''',
                         ),
                       ),
@@ -198,24 +203,30 @@ error: ${_latestPurchase!.errorMessage ?? '-'}
   }
 
   Future<void> _refreshProducts() async {
-    final response = await _nativeInAppPurchasePlugin.getProductsResponse(
-      _productIds,
+    final response = await _inAppPurchase.queryProductDetails(
+      _productIds.toSet(),
     );
     if (!mounted) {
       return;
     }
     setState(() {
-      _products = response.products;
-      _notFoundIds = response.notFoundIds;
+      _products = response.productDetails;
+      _notFoundIds = response.notFoundIDs;
     });
   }
 
   Future<void> _buyProduct(String productId) async {
     try {
-      await _nativeInAppPurchasePlugin.buyProduct(
-        productId,
-        isConsumable: productId == 'coins_pack',
-      );
+      final product = _products.firstWhere((item) => item.id == productId);
+      if (productId == 'coins_pack') {
+        await _inAppPurchase.buyConsumable(
+          purchaseParam: PurchaseParam(productDetails: product),
+        );
+      } else {
+        await _inAppPurchase.buyNonConsumable(
+          purchaseParam: PurchaseParam(productDetails: product),
+        );
+      }
     } on NativeInAppPurchaseException catch (error) {
       if (!mounted) {
         return;
@@ -228,7 +239,7 @@ error: ${_latestPurchase!.errorMessage ?? '-'}
 
   Future<void> _restorePurchases() async {
     try {
-      await _nativeInAppPurchasePlugin.restorePurchases();
+      await _inAppPurchase.restorePurchases();
       if (!mounted) {
         return;
       }
@@ -245,15 +256,15 @@ error: ${_latestPurchase!.errorMessage ?? '-'}
     }
   }
 
-  Future<void> _completePurchase(Purchase purchase) async {
+  Future<void> _completePurchase(PurchaseDetails purchase) async {
     try {
-      await _nativeInAppPurchasePlugin.completePurchase(purchase);
+      await _inAppPurchase.completePurchase(purchase);
       if (!mounted) {
         return;
       }
       setState(() {
         _statusMessage =
-            'Purchase completed after delivery for ${purchase.productId}.';
+            'Purchase completed after delivery for ${purchase.productID}.';
       });
     } on NativeInAppPurchaseException catch (error) {
       if (!mounted) {

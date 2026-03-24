@@ -6,10 +6,10 @@ void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
   testWidgets('initialize call completes', (WidgetTester tester) async {
-    final NativeInAppPurchase plugin = NativeInAppPurchase();
+    final InAppPurchase plugin = InAppPurchase.instance;
 
     await plugin.initialize();
 
-    expect(plugin.purchaseUpdates, isA<Stream<Purchase>>());
+    expect(plugin.purchaseStream, isA<Stream<List<PurchaseDetails>>>());
   });
 }

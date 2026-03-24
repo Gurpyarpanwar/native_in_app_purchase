@@ -1,13 +1,24 @@
 enum PurchaseStatus {
   pending,
   purchased,
-  failed,
-  restored;
+  error,
+  restored,
+  canceled;
 
   static PurchaseStatus fromValue(String value) {
-    return PurchaseStatus.values.firstWhere(
-      (status) => status.name == value,
-      orElse: () => PurchaseStatus.failed,
-    );
+    switch (value) {
+      case 'pending':
+        return PurchaseStatus.pending;
+      case 'purchased':
+        return PurchaseStatus.purchased;
+      case 'restored':
+        return PurchaseStatus.restored;
+      case 'canceled':
+        return PurchaseStatus.canceled;
+      case 'failed':
+      case 'error':
+      default:
+        return PurchaseStatus.error;
+    }
   }
 }
