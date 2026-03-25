@@ -18,6 +18,7 @@ final class StoreKitManager: NSObject {
   private var productRequestResult: FlutterResult?
   private var restoreResult: FlutterResult?
   private var isObservingQueue = false
+  private var restoreInProgress = false
 
   func initialize() {
     guard !isObservingQueue else { return }
@@ -87,6 +88,7 @@ final class StoreKitManager: NSObject {
 
   func restorePurchases(result: @escaping FlutterResult) {
     restoreResult = result
+    restoreInProgress = true
     SKPaymentQueue.default().restoreCompletedTransactions()
   }
 
@@ -171,7 +173,10 @@ extension StoreKitManager: SKPaymentTransactionObserver {
         delegate?.storeKitManager(self, didUpdatePurchase: failedPurchaseMap(from: transaction))
         queue.finishTransaction(transaction)
       case .restored:
-        handleCompletedTransaction(transaction, status: "restored")
+        handleCompletedTransaction(
+          transaction,
+          status: restoreInProgress ? "restored" : "purchased"
+        )
       case .deferred:
         delegate?.storeKitManager(self, didUpdatePurchase: purchaseMap(from: transaction, status: "pending"))
       case .purchasing:
@@ -190,11 +195,13 @@ extension StoreKitManager: SKPaymentTransactionObserver {
   }
 
   func paymentQueueRestoreCompletedTransactionsFinished(_ queue: SKPaymentQueue) {
+    restoreInProgress = false
     restoreResult?(nil)
     restoreResult = nil
   }
 
   func paymentQueue(_ queue: SKPaymentQueue, restoreCompletedTransactionsFailedWithError error: Error) {
+    restoreInProgress = false
     restoreResult?(
       FlutterError(
         code: "restore_failed",

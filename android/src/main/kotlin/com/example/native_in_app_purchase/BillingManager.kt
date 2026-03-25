@@ -51,6 +51,7 @@ class BillingManager(
 
     private var activity: Activity? = null
     private var isInitialized = false
+    private var restoreInProgress = false
 
     fun setActivity(activity: Activity?) {
         this.activity = activity
@@ -208,16 +209,14 @@ class BillingManager(
             if (billingResult.responseCode == BillingClient.BillingResponseCode.OK) {
                 callback(true, null)
             } else if (billingResult.responseCode == BillingClient.BillingResponseCode.ITEM_ALREADY_OWNED) {
-                restorePurchases { restoreError ->
-                    callback(
-                        false,
-                        restoreError ?: billingError(
-                            billingResult,
-                            fallbackCode = "item_already_owned",
-                            fallbackMessage = "Item is already owned.",
-                        ),
-                    )
-                }
+                callback(
+                    false,
+                    billingError(
+                        billingResult,
+                        fallbackCode = "item_already_owned",
+                        fallbackMessage = "Item is already owned. Call restorePurchases() to sync existing purchases.",
+                    ),
+                )
             } else {
                 callback(
                     false,
@@ -238,13 +237,16 @@ class BillingManager(
                 return@ensureReady
             }
 
+            restoreInProgress = true
             queryOwnedPurchases(BillingClient.ProductType.INAPP) { inAppError ->
                 if (inAppError != null) {
+                    restoreInProgress = false
                     callback(inAppError)
                     return@queryOwnedPurchases
                 }
 
                 queryOwnedPurchases(BillingClient.ProductType.SUBS) { subsError ->
+                    restoreInProgress = false
                     callback(subsError)
                 }
             }
@@ -325,11 +327,13 @@ class BillingManager(
             }
 
             BillingClient.BillingResponseCode.ITEM_ALREADY_OWNED -> {
-                restorePurchases { error ->
-                    if (error != null) {
-                        listener.onPurchaseError(error)
-                    }
-                }
+                listener.onPurchaseError(
+                    PluginError(
+                        code = "item_already_owned",
+                        message = "Item is already owned. Call restorePurchases() to sync purchases.",
+                        details = mapOf("responseCode" to billingResult.responseCode),
+                    ),
+                )
             }
 
             else -> {
@@ -410,7 +414,12 @@ class BillingManager(
             }
 
             purchases.forEach { purchase ->
-                emitPurchaseUpdate(purchase, wasRestored = true, autoCompleted = false)
+                emitPurchaseUpdate(
+                    purchase,
+                    wasRestored = restoreInProgress &&
+                        purchase.purchaseState == Purchase.PurchaseState.PURCHASED,
+                    autoCompleted = false,
+                )
             }
 
             callback(null)
@@ -423,8 +432,8 @@ class BillingManager(
         autoCompleted: Boolean,
     ) {
         val status = when {
-            wasRestored -> "restored"
             purchase.purchaseState == Purchase.PurchaseState.PENDING -> "pending"
+            wasRestored -> "restored"
             purchase.purchaseState == Purchase.PurchaseState.PURCHASED -> "purchased"
             else -> "error"
         }

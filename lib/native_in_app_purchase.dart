@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/services.dart';
 
 import 'src/errors/iap_error.dart';
@@ -20,17 +22,19 @@ class NativeInAppPurchase {
     MethodChannel? methodChannel,
     EventChannel? eventChannel,
   }) : _methodChannel =
-           methodChannel ?? const MethodChannel(_methodChannelName),
-       _eventChannel = eventChannel ?? const EventChannel(_eventChannelName);
+           methodChannel ?? const MethodChannel(_methodChannelName);
 
   static const String _methodChannelName = 'native_in_app_purchase';
   static const String _eventChannelName = 'native_in_app_purchase/events';
+  static const EventChannel _sharedEventChannel = EventChannel(
+    _eventChannelName,
+  );
 
   final MethodChannel _methodChannel;
-  final EventChannel _eventChannel;
-
-  Stream<PurchaseDetails>? _purchaseUpdates;
-  Stream<List<PurchaseDetails>>? _purchaseStream;
+  static StreamController<PurchaseDetails>? _purchaseUpdatesController;
+  static StreamSubscription<dynamic>? _nativePurchaseSubscription;
+  static Stream<PurchaseDetails>? _sharedPurchaseUpdates;
+  static Stream<List<PurchaseDetails>>? _sharedPurchaseStream;
 
   /// Initializes the native billing clients.
   Future<void> initialize() {
@@ -167,25 +171,57 @@ class NativeInAppPurchase {
   }
 
   Stream<List<PurchaseDetails>> get purchaseStream {
-    return _purchaseStream ??= purchaseUpdates
+    return _sharedPurchaseStream ??= purchaseUpdates
         .map((PurchaseDetails purchase) => <PurchaseDetails>[purchase])
         .asBroadcastStream();
   }
 
   /// Broadcast stream of native purchase updates.
   Stream<PurchaseDetails> get purchaseUpdates {
-    return _purchaseUpdates ??= _eventChannel
+    return _sharedPurchaseUpdates ??= _buildSharedPurchaseUpdates();
+  }
+
+  static Stream<PurchaseDetails> _buildSharedPurchaseUpdates() {
+    _purchaseUpdatesController ??= StreamController<PurchaseDetails>.broadcast(
+      onListen: _ensureNativePurchaseSubscription,
+      onCancel: _cancelNativePurchaseSubscriptionIfIdle,
+    );
+
+    return _purchaseUpdatesController!.stream;
+  }
+
+  static void _ensureNativePurchaseSubscription() {
+    if (_nativePurchaseSubscription != null) {
+      return;
+    }
+
+    _nativePurchaseSubscription = _sharedEventChannel
         .receiveBroadcastStream()
-        .map(
-          (dynamic event) =>
-              PurchaseDetails.fromMap(Map<String, dynamic>.from(event as Map)),
-        )
-        .handleError(
-          (Object error) => throw error is PlatformException
-              ? NativeInAppPurchaseException.fromPlatformException(error)
-              : error,
-        )
-        .asBroadcastStream();
+        .listen(
+          (dynamic event) {
+            if (event is Map) {
+              _purchaseUpdatesController?.add(
+                PurchaseDetails.fromMap(Map<String, dynamic>.from(event)),
+              );
+            }
+          },
+          onError: (Object error, StackTrace stackTrace) {
+            final wrapped = error is PlatformException
+                ? NativeInAppPurchaseException.fromPlatformException(error)
+                : error;
+            _purchaseUpdatesController?.addError(wrapped, stackTrace);
+          },
+          cancelOnError: false,
+        );
+  }
+
+  static Future<void> _cancelNativePurchaseSubscriptionIfIdle() async {
+    if (_purchaseUpdatesController?.hasListener ?? false) {
+      return;
+    }
+
+    await _nativePurchaseSubscription?.cancel();
+    _nativePurchaseSubscription = null;
   }
 }
 
