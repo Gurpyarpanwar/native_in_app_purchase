@@ -127,11 +127,14 @@ class NativeInAppPurchasePlugin :
                 }
             }
 
-            "restorePurchases" -> manager.restorePurchases { error ->
-                if (error == null) {
-                    result.success(null)
-                } else {
-                    result.error(error.code, error.message, error.details)
+            "restorePurchases" -> {
+                val consumableProductIds = call.argument<List<String>>("consumableProductIds").orEmpty()
+                manager.restorePurchases(consumableProductIds = consumableProductIds) { error ->
+                    if (error == null) {
+                        result.success(null)
+                    } else {
+                        result.error(error.code, error.message, error.details)
+                    }
                 }
             }
 

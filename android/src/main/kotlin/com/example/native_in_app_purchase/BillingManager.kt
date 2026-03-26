@@ -2,6 +2,8 @@ package com.example.native_in_app_purchase
 
 import android.app.Activity
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import com.android.billingclient.api.AcknowledgePurchaseParams
 import com.android.billingclient.api.BillingClient
@@ -15,7 +17,9 @@ import com.android.billingclient.api.Purchase
 import com.android.billingclient.api.PurchasesUpdatedListener
 import com.android.billingclient.api.QueryProductDetailsParams
 import com.android.billingclient.api.QueryPurchasesParams
+import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.math.pow
 
 class BillingManager(
     context: Context,
@@ -38,6 +42,8 @@ class BillingManager(
     private val pendingPurchases = ConcurrentHashMap<String, Purchase>()
     private val consumableProducts = ConcurrentHashMap<String, Boolean>()
     private val autoConsumeProducts = ConcurrentHashMap<String, Boolean>()
+    private val processedTokens = Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
+    private val mainHandler = Handler(Looper.getMainLooper())
     private val billingClient: BillingClient =
         BillingClient.newBuilder(applicationContext)
             .setListener(this)
@@ -52,6 +58,8 @@ class BillingManager(
     private var activity: Activity? = null
     private var isInitialized = false
     private var restoreInProgress = false
+    private var activePurchaseProductId: String? = null
+    private var reconnectAttempts = 0
 
     fun setActivity(activity: Activity?) {
         this.activity = activity
@@ -68,6 +76,8 @@ class BillingManager(
             override fun onBillingSetupFinished(billingResult: BillingResult) {
                 if (billingResult.responseCode == BillingClient.BillingResponseCode.OK) {
                     isInitialized = true
+                    reconnectAttempts = 0
+                    processedTokens.clear()
                     logDebug("Billing client connected: ${billingResult.debugMessage}")
                     callback(null)
                 } else {
@@ -84,6 +94,13 @@ class BillingManager(
             override fun onBillingServiceDisconnected() {
                 isInitialized = false
                 logDebug("Billing service disconnected.")
+                if (reconnectAttempts < 3) {
+                    val delayMs = (2.0.pow(reconnectAttempts) * 1000).toLong()
+                    reconnectAttempts += 1
+                    mainHandler.postDelayed({
+                        initialize {}
+                    }, delayMs)
+                }
             }
         })
     }
@@ -183,6 +200,7 @@ class BillingManager(
 
             consumableProducts[productId] = isConsumable
             autoConsumeProducts[productId] = autoConsume
+            activePurchaseProductId = productId
 
             val paramsBuilder = BillingFlowParams.ProductDetailsParams.newBuilder()
                 .setProductDetails(productDetails)
@@ -191,8 +209,7 @@ class BillingManager(
                 ?.takeIf { it.isNotBlank() }
                 ?.let(paramsBuilder::setOfferToken)
 
-            productDetails.subscriptionOfferDetails
-                ?.firstOrNull()
+            selectBestSubscriptionOffer(productDetails)
                 ?.offerToken
                 ?.takeIf { it.isNotBlank() }
                 ?.let(paramsBuilder::setOfferToken)
@@ -209,6 +226,8 @@ class BillingManager(
             if (billingResult.responseCode == BillingClient.BillingResponseCode.OK) {
                 callback(true, null)
             } else if (billingResult.responseCode == BillingClient.BillingResponseCode.ITEM_ALREADY_OWNED) {
+                cleanupProduct(productId)
+                activePurchaseProductId = null
                 callback(
                     false,
                     billingError(
@@ -218,6 +237,8 @@ class BillingManager(
                     ),
                 )
             } else {
+                cleanupProduct(productId)
+                activePurchaseProductId = null
                 callback(
                     false,
                     billingError(
@@ -230,7 +251,10 @@ class BillingManager(
         }
     }
 
-    fun restorePurchases(callback: (PluginError?) -> Unit) {
+    fun restorePurchases(
+        consumableProductIds: List<String> = emptyList(),
+        callback: (PluginError?) -> Unit,
+    ) {
         ensureReady { error ->
             if (error != null) {
                 callback(error)
@@ -238,6 +262,8 @@ class BillingManager(
             }
 
             restoreInProgress = true
+            processedTokens.clear()
+            consumableProductIds.forEach { consumableProducts[it] = true }
             queryOwnedPurchases(BillingClient.ProductType.INAPP) { inAppError ->
                 if (inAppError != null) {
                     restoreInProgress = false
@@ -267,17 +293,20 @@ class BillingManager(
 
             val token = purchaseToken?.takeIf { it.isNotBlank() }
             if (token.isNullOrBlank()) {
-                callback(
-                    PluginError(
-                        code = "invalid_purchase_token",
-                        message = "A valid purchase token is required to complete the purchase.",
-                    ),
-                )
+                productId?.let(::cleanupProduct)
+                callback(null)
+                return@ensureReady
+            }
+
+            val pendingPurchase = pendingPurchases[token]
+            if (pendingPurchase == null) {
+                productId?.let(::cleanupProduct)
+                callback(null)
                 return@ensureReady
             }
 
             if (isConsumable || consumableProducts[productId] == true) {
-                consumePurchase(token, callback)
+                consumePurchase(token, pendingPurchase.products, callback)
             } else {
                 acknowledgePurchase(token, callback)
             }
@@ -299,21 +328,39 @@ class BillingManager(
         when (billingResult.responseCode) {
             BillingClient.BillingResponseCode.OK -> {
                 purchases.orEmpty().forEach { purchase ->
+                    val trackedProductId = activePurchaseProductId
+                    if (!restoreInProgress &&
+                        trackedProductId != null &&
+                        !purchase.products.contains(trackedProductId)
+                    ) {
+                        return@forEach
+                    }
+                    if (!processedTokens.add(purchase.purchaseToken)) {
+                        return@forEach
+                    }
+
                     val shouldAutoConsume = purchase.products.any { autoConsumeProducts[it] == true }
                     if (shouldAutoConsume) {
-                        consumePurchase(purchase.purchaseToken) { error ->
+                        consumePurchase(purchase.purchaseToken, purchase.products) { error ->
                             if (error != null) {
                                 listener.onPurchaseError(error)
                             }
                             emitPurchaseUpdate(purchase, wasRestored = false, autoCompleted = error == null)
+                            if (trackedProductId != null) {
+                                activePurchaseProductId = null
+                            }
                         }
                     } else {
                         emitPurchaseUpdate(purchase, wasRestored = false, autoCompleted = false)
+                        if (trackedProductId != null) {
+                            activePurchaseProductId = null
+                        }
                     }
                 }
             }
 
             BillingClient.BillingResponseCode.USER_CANCELED -> {
+                activePurchaseProductId = null
                 listener.onPurchaseUpdate(
                     purchaseMap(
                         status = "canceled",
@@ -327,6 +374,7 @@ class BillingManager(
             }
 
             BillingClient.BillingResponseCode.ITEM_ALREADY_OWNED -> {
+                activePurchaseProductId = null
                 listener.onPurchaseError(
                     PluginError(
                         code = "item_already_owned",
@@ -337,6 +385,7 @@ class BillingManager(
             }
 
             else -> {
+                activePurchaseProductId = null
                 listener.onPurchaseError(
                     billingError(
                         billingResult,
@@ -439,7 +488,9 @@ class BillingManager(
         }
 
         val transactionId = purchase.orderId ?: purchase.purchaseToken
-        pendingPurchases[purchase.purchaseToken] = purchase
+        if (purchase.purchaseState == Purchase.PurchaseState.PURCHASED) {
+            pendingPurchases[purchase.purchaseToken] = purchase
+        }
         purchase.products.forEach { productId ->
             listener.onPurchaseUpdate(
                 purchaseMap(
@@ -469,6 +520,8 @@ class BillingManager(
     ) {
         val purchase = pendingPurchases[purchaseToken]
         if (purchase?.isAcknowledged == true) {
+            pendingPurchases.remove(purchaseToken)
+            purchase.products.forEach(::cleanupProduct)
             callback(null)
             return
         }
@@ -479,6 +532,8 @@ class BillingManager(
 
         billingClient.acknowledgePurchase(acknowledgeParams) { billingResult ->
             if (billingResult.responseCode == BillingClient.BillingResponseCode.OK) {
+                pendingPurchases.remove(purchaseToken)
+                purchase?.products?.forEach(::cleanupProduct)
                 callback(null)
             } else {
                 callback(
@@ -494,6 +549,7 @@ class BillingManager(
 
     private fun consumePurchase(
         purchaseToken: String,
+        productIds: List<String> = emptyList(),
         callback: (PluginError?) -> Unit,
     ) {
         val params = ConsumeParams.newBuilder()
@@ -502,8 +558,10 @@ class BillingManager(
 
         billingClient.consumeAsync(params) { billingResult, _ ->
             if (billingResult.responseCode == BillingClient.BillingResponseCode.OK) {
-                pendingPurchases.remove(purchaseToken)
+                val purchase = pendingPurchases.remove(purchaseToken)
+                val purchasedProductIds = purchase?.products.orEmpty().ifEmpty { productIds }
                 callback(null)
+                purchasedProductIds.forEach(::cleanupProduct)
             } else {
                 callback(
                     billingError(
@@ -530,8 +588,8 @@ class BillingManager(
 
     private fun productToMap(details: ProductDetails): Map<String, Any?> {
         val oneTimeOffer = details.oneTimePurchaseOfferDetails
-        val subscriptionPricing = details.subscriptionOfferDetails
-            ?.firstOrNull()
+        val selectedSubscriptionOffer = selectBestSubscriptionOffer(details)
+        val subscriptionPricing = selectedSubscriptionOffer
             ?.pricingPhases
             ?.pricingPhaseList
             ?.firstOrNull()
@@ -548,7 +606,47 @@ class BillingManager(
             "currencyCode" to currencyCode,
             "currencySymbol" to currencyCode,
             "type" to details.productType,
+            "subscriptionOffers" to details.subscriptionOfferDetails.orEmpty().map { offer ->
+                val phases = offer.pricingPhases.pricingPhaseList
+                val displayPhase = phases.lastOrNull() ?: phases.firstOrNull()
+                val freeTrialPhase = phases.firstOrNull { phase ->
+                    phase.priceAmountMicros == 0L &&
+                        phase.recurrenceMode == ProductDetails.RecurrenceMode.FINITE_RECURRING
+                }
+
+                mapOf(
+                    "offerToken" to offer.offerToken,
+                    "formattedPrice" to displayPhase?.formattedPrice,
+                    "billingPeriod" to displayPhase?.billingPeriod,
+                    "freeTrialPeriod" to freeTrialPhase?.billingPeriod,
+                )
+            },
         )
+    }
+
+    private fun cleanupProduct(productId: String) {
+        consumableProducts.remove(productId)
+        autoConsumeProducts.remove(productId)
+    }
+
+    private fun selectBestSubscriptionOffer(
+        details: ProductDetails,
+    ): ProductDetails.SubscriptionOfferDetails? {
+        return details.subscriptionOfferDetails
+            ?.minWithOrNull(
+                compareBy<ProductDetails.SubscriptionOfferDetails> { offer ->
+                    if (offer.hasFreeTrial()) 0 else 1
+                }.thenBy { offer ->
+                    offer.pricingPhases.pricingPhaseList.lastOrNull()?.priceAmountMicros ?: Long.MAX_VALUE
+                },
+            )
+    }
+
+    private fun ProductDetails.SubscriptionOfferDetails.hasFreeTrial(): Boolean {
+        return pricingPhases.pricingPhaseList.any { phase ->
+            phase.priceAmountMicros == 0L &&
+                phase.recurrenceMode == ProductDetails.RecurrenceMode.FINITE_RECURRING
+        }
     }
 
     private fun purchaseMap(

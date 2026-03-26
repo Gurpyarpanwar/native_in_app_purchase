@@ -19,6 +19,8 @@ final class StoreKitManager: NSObject {
   private var restoreResult: FlutterResult?
   private var isObservingQueue = false
   private var restoreInProgress = false
+  private var processedTransactionIds = Set<String>()
+  private var subscriptionProductIds = Set<String>()
 
   func initialize() {
     guard !isObservingQueue else { return }
@@ -40,6 +42,13 @@ final class StoreKitManager: NSObject {
     }
 
     productRequest?.cancel()
+    productRequestResult?(
+      FlutterError(
+        code: "request_superseded",
+        message: "A newer getProducts request was started.",
+        details: nil
+      )
+    )
     productRequestResult = result
 
     let request = SKProductsRequest(productIdentifiers: Set(productIds))
@@ -77,6 +86,7 @@ final class StoreKitManager: NSObject {
       return
     }
 
+    processedTransactionIds.removeAll()
     productTypesByIdentifier[productId] = isConsumable
     autoConsumeByIdentifier[productId] = autoConsume
 
@@ -86,26 +96,26 @@ final class StoreKitManager: NSObject {
     result(true)
   }
 
-  func restorePurchases(result: @escaping FlutterResult) {
+  func restorePurchases(
+    consumableProductIds: [String] = [],
+    result: @escaping FlutterResult
+  ) {
     restoreResult = result
     restoreInProgress = true
+    processedTransactionIds.removeAll()
+    consumableProductIds.forEach { productTypesByIdentifier[$0] = true }
     SKPaymentQueue.default().restoreCompletedTransactions()
   }
 
   func completePurchase(transactionId: String?, result: @escaping FlutterResult) {
     guard let transactionId, let transaction = pendingTransactions[transactionId] else {
-      result(
-        FlutterError(
-          code: "transaction_not_found",
-          message: "No pending transaction found for completion.",
-          details: nil
-        )
-      )
+      result(nil)
       return
     }
 
     SKPaymentQueue.default().finishTransaction(transaction)
     pendingTransactions.removeValue(forKey: transactionId)
+    cleanupProduct(transaction.payment.productIdentifier)
     result(nil)
   }
 
@@ -118,11 +128,15 @@ final class StoreKitManager: NSObject {
 
 extension StoreKitManager: SKProductsRequestDelegate {
   func productsRequest(_ request: SKProductsRequest, didReceive response: SKProductsResponse) {
+    guard let currentRequest = productRequest, request === currentRequest else { return }
     let formatter = NumberFormatter()
     formatter.numberStyle = .currency
 
     let products = response.products.map { product -> [String: Any?] in
       productsByIdentifier[product.productIdentifier] = product
+      if product.subscriptionPeriod != nil {
+        subscriptionProductIds.insert(product.productIdentifier)
+      }
       formatter.locale = product.priceLocale
 
       return [
@@ -150,6 +164,7 @@ extension StoreKitManager: SKProductsRequestDelegate {
   }
 
   func request(_ request: SKRequest, didFailWithError error: Error) {
+    guard let currentRequest = productRequest, request === currentRequest else { return }
     productRequestResult?(
       FlutterError(
         code: "product_request_failed",
@@ -167,12 +182,17 @@ extension StoreKitManager: SKPaymentTransactionObserver {
     for transaction in transactions {
       switch transaction.transactionState {
       case .purchased:
+        let key = transactionKey(transaction)
+        guard processedTransactionIds.insert(key).inserted else { continue }
         handleCompletedTransaction(transaction, status: "purchased")
       case .failed:
 
         delegate?.storeKitManager(self, didUpdatePurchase: failedPurchaseMap(from: transaction))
         queue.finishTransaction(transaction)
+        cleanupProduct(transaction.payment.productIdentifier)
       case .restored:
+        let key = transactionKey(transaction)
+        guard processedTransactionIds.insert(key).inserted else { continue }
         handleCompletedTransaction(
           transaction,
           status: restoreInProgress ? "restored" : "purchased"
@@ -198,6 +218,7 @@ extension StoreKitManager: SKPaymentTransactionObserver {
     restoreInProgress = false
     restoreResult?(nil)
     restoreResult = nil
+    processedTransactionIds.removeAll()
   }
 
   func paymentQueue(_ queue: SKPaymentQueue, restoreCompletedTransactionsFailedWithError error: Error) {
@@ -210,11 +231,12 @@ extension StoreKitManager: SKPaymentTransactionObserver {
       )
     )
     restoreResult = nil
+    processedTransactionIds.removeAll()
   }
 
   private func purchaseMap(from transaction: SKPaymentTransaction, status: String) -> [String: Any?] {
     let productId = transaction.payment.productIdentifier
-    let transactionId = transaction.transactionIdentifier ?? UUID().uuidString
+    let transactionId = transactionKey(transaction)
     let receiptData = Bundle.main.appStoreReceiptURL.flatMap { try? Data(contentsOf: $0) }
     let encodedReceipt = receiptData?.base64EncodedString()
     let transactionDate = transaction.transactionDate.map {
@@ -250,7 +272,7 @@ extension StoreKitManager: SKPaymentTransactionObserver {
     return [
       "status": isCanceled ? "canceled" : "error",
       "productId": transaction.payment.productIdentifier,
-      "transactionId": transaction.transactionIdentifier ?? "",
+      "transactionId": transactionKey(transaction),
       "transactionDate": nil,
       "purchaseToken": nil,
       "verificationData": nil,
@@ -264,10 +286,11 @@ extension StoreKitManager: SKPaymentTransactionObserver {
 
   private func handleCompletedTransaction(_ transaction: SKPaymentTransaction, status: String) {
     let productId = transaction.payment.productIdentifier
-    let transactionId = transaction.transactionIdentifier ?? UUID().uuidString
+    let transactionId = transactionKey(transaction)
     let shouldAutoConsume =
       (productTypesByIdentifier[productId] ?? false) &&
-      (autoConsumeByIdentifier[productId] ?? true)
+      (autoConsumeByIdentifier[productId] ?? true) &&
+      !subscriptionProductIds.contains(productId)
 
     if shouldAutoConsume {
       delegate?.storeKitManager(
@@ -277,6 +300,7 @@ extension StoreKitManager: SKPaymentTransactionObserver {
         ]) { _, new in new }
       )
       SKPaymentQueue.default().finishTransaction(transaction)
+      cleanupProduct(productId)
       return
     }
 
@@ -285,5 +309,19 @@ extension StoreKitManager: SKPaymentTransactionObserver {
       self,
       didUpdatePurchase: purchaseMap(from: transaction, status: status)
     )
+  }
+
+  private func cleanupProduct(_ productId: String) {
+    productTypesByIdentifier.removeValue(forKey: productId)
+    autoConsumeByIdentifier.removeValue(forKey: productId)
+  }
+
+  private func transactionKey(_ transaction: SKPaymentTransaction) -> String {
+    if let transactionIdentifier = transaction.transactionIdentifier, !transactionIdentifier.isEmpty {
+      return transactionIdentifier
+    }
+
+    let timestamp = Int64(transaction.transactionDate?.timeIntervalSince1970 ?? 0)
+    return "\(transaction.payment.productIdentifier)_\(timestamp)"
   }
 }

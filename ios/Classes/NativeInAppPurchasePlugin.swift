@@ -91,7 +91,12 @@ public class NativeInAppPurchasePlugin: NSObject, FlutterPlugin, FlutterStreamHa
         result: result
       )
     case "restorePurchases":
-      storeKitManager.restorePurchases(result: result)
+      let arguments = call.arguments as? [String: Any]
+      let consumableProductIds = arguments?["consumableProductIds"] as? [String] ?? []
+      storeKitManager.restorePurchases(
+        consumableProductIds: consumableProductIds,
+        result: result
+      )
     default:
       result(FlutterMethodNotImplemented)
     }
