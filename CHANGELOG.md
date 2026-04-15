@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.2
+
+- Standardized `cancelled` spelling across purchase status values and user-facing cancellation messages.
+
 ## 0.2.1
 
 - Fixed Android sequential purchase routing so purchase updates only process the active product flow.
@@ -17,14 +21,14 @@
 - Added `buyNonConsumable`, `buyConsumable`, `queryProductDetails`, and `purchaseStream`
 - Improved stream handling to avoid stacking native listeners
 - Improved restore and pending purchase handling
-- Fixed canceled/error purchase state mapping on Android and iOS
+- Fixed cancelled/error purchase state mapping on Android and iOS
 
 ## 0.1.0
 
 - Added an `in_app_purchase`-style API with `InAppPurchase.instance`
 - Added `ProductDetails`, `ProductDetailsResponse`, `PurchaseDetails`, and `IAPError`
 - Added `buyNonConsumable`, `buyConsumable`, `queryProductDetails`, and `purchaseStream`
-- Improved Android and iOS canceled/error purchase state handling
+- Improved Android and iOS cancelled/error purchase state handling
 - Updated example app to use the new API
 - Improved pub.dev package documentation
 

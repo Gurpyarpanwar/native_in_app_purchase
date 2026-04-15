@@ -3,7 +3,7 @@ enum PurchaseStatus {
   purchased,
   error,
   restored,
-  canceled;
+  cancelled;
 
   static PurchaseStatus fromValue(String value) {
     switch (value) {
@@ -13,8 +13,10 @@ enum PurchaseStatus {
         return PurchaseStatus.purchased;
       case 'restored':
         return PurchaseStatus.restored;
+      case 'cancelled':
+        return PurchaseStatus.cancelled;
       case 'canceled':
-        return PurchaseStatus.canceled;
+        return PurchaseStatus.cancelled;
       case 'failed':
       case 'error':
       default:

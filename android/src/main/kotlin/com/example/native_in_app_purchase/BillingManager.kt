@@ -363,11 +363,11 @@ class BillingManager(
                 activePurchaseProductId = null
                 listener.onPurchaseUpdate(
                     purchaseMap(
-                        status = "canceled",
+                        status = "cancelled",
                         productId = "",
                         transactionId = "",
-                        errorCode = "user_canceled",
-                        errorMessage = "User canceled the purchase flow.",
+                        errorCode = "user_cancelled",
+                        errorMessage = "User cancelled the purchase flow.",
                         debugMessage = billingResult.debugMessage,
                     ),
                 )

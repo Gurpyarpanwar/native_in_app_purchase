@@ -265,19 +265,19 @@ extension StoreKitManager: SKPaymentTransactionObserver {
 
   private func failedPurchaseMap(from transaction: SKPaymentTransaction) -> [String: Any?] {
     let error = transaction.error as NSError?
-    let isCanceled =
+    let isCancelled =
       error?.domain == SKErrorDomain &&
       error?.code == SKError.paymentCancelled.rawValue
 
     return [
-      "status": isCanceled ? "canceled" : "error",
+      "status": isCancelled ? "cancelled" : "error",
       "productId": transaction.payment.productIdentifier,
       "transactionId": transactionKey(transaction),
       "transactionDate": nil,
       "purchaseToken": nil,
       "verificationData": nil,
-      "errorCode": isCanceled ? nil : error.map { "\($0.code)" },
-      "errorMessage": isCanceled ? "Purchase canceled." : error?.localizedDescription ?? "Purchase failed.",
+      "errorCode": isCancelled ? nil : error.map { "\($0.code)" },
+      "errorMessage": isCancelled ? "Purchase cancelled." : error?.localizedDescription ?? "Purchase failed.",
       "pendingCompletePurchase": false,
       "debugMessage": nil,
       "isConsumable": productTypesByIdentifier[transaction.payment.productIdentifier] ?? false

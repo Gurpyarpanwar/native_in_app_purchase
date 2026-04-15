@@ -26,7 +26,7 @@ Add the dependency to your app:
 
 ```yaml
 dependencies:
-  native_in_app_purchase: ^0.0.1
+  native_in_app_purchase: ^0.2.2
 ```
 
 Then run:

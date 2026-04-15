@@ -4,7 +4,7 @@
 #
 Pod::Spec.new do |s|
   s.name             = 'native_in_app_purchase'
-  s.version          = '0.0.1'
+  s.version          = '0.2.2'
   s.summary          = 'Native Android and iOS in-app purchases for Flutter.'
   s.description      = <<-DESC
 Flutter plugin that exposes Google Play Billing and StoreKit through

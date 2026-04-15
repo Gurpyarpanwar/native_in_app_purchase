@@ -100,6 +100,26 @@ void main() {
     expect(purchase.isConsumable, isTrue);
   });
 
+  test('parses cancelled purchase status', () {
+    final purchase = PurchaseDetails.fromMap(<String, Object?>{
+      'status': 'cancelled',
+      'productId': 'coins_pack',
+      'pendingCompletePurchase': false,
+    });
+
+    expect(purchase.status, PurchaseStatus.cancelled);
+  });
+
+  test('parses legacy canceled purchase status', () {
+    final purchase = PurchaseDetails.fromMap(<String, Object?>{
+      'status': 'canceled',
+      'productId': 'coins_pack',
+      'pendingCompletePurchase': false,
+    });
+
+    expect(purchase.status, PurchaseStatus.cancelled);
+  });
+
   test('in_app_purchase style wrapper exists', () {
     expect(plugin.purchaseStream, isA<Stream<List<PurchaseDetails>>>());
   });
